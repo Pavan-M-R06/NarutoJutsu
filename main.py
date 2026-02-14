@@ -82,8 +82,8 @@ class ShadowCloneAR:
         self.hands = self.mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=2,
-            min_detection_confidence=0.7,
-            min_tracking_confidence=0.5,
+            min_detection_confidence=0.4,
+            min_tracking_confidence=0.3,
         )
 
         # ── MediaPipe Selfie Segmentation ──────────────────────
@@ -605,14 +605,15 @@ class ShadowCloneAR:
                 frame_count = 0
                 prev_time = current_time
 
-            # ── Phase B: Hand Detection (only when clones inactive) ──
+            # ── Phase B: Hand Detection (always active) ──────
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            hand_results = self.hands.process(rgb)
+
+            # Draw green hand skeleton (always visible)
+            self.draw_hand_landmarks(display, hand_results)
+
+            # Only check for jutsu trigger when clones are not active
             if not self.clone_mode and not self.waiting_for_poof:
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                hand_results = self.hands.process(rgb)
-
-                # Draw green hand skeleton (like the reference video)
-                self.draw_hand_landmarks(display, hand_results)
-
                 jutsu = self.is_jutsu_active(hand_results)
 
                 if jutsu and not self.jutsu_detected:
