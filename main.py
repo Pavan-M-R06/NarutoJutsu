@@ -101,7 +101,7 @@ class ShadowCloneAR:
         self.waiting_for_poof = False    # Waiting for delay before poof?
 
         # ── Clone Configuration ────────────────────────────────
-        self.num_clones = 12
+        self.num_clones = 9
         self.clone_offsets = self._generate_clone_positions()
 
         # ── Assets ─────────────────────────────────────────────
@@ -299,6 +299,43 @@ class ShadowCloneAR:
         mask = (results.segmentation_mask > 0.6).astype(np.uint8)
         return mask
 
+    def apply_anime_style(self, img):
+        """
+        Apply a 'Heavy Cartoon' / Anime style filter.
+        1. Bilateral filter for smoothing colors (cartoon skin)
+        2. Edge detection for outline (cel-shading)
+        3. Quantize colors to reduce palette
+        """
+        # 1. Smoothing (Bilateral Filter) - keeps edges sharp
+        # d=9, sigmaColor=75, sigmaSpace=75
+        color = cv2.bilateralFilter(img, 9, 75, 75)
+
+        # 2. Edge Detection (Adaptive Threshold)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        blur = cv2.medianBlur(gray, 7)
+        edges = cv2.adaptiveThreshold(blur, 255,
+                                      cv2.ADAPTIVE_THRESH_MEAN_C,
+                                      cv2.THRESH_BINARY, 9, 9)
+
+        # 3. Combine Color + Edges
+        # Create a 3-channel edge mask
+        edges_3ch = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+
+        # Cartoon effect: color image ANDed with edges
+        cartoon = cv2.bitwise_and(color, edges_3ch)
+
+        # Optional: Increase saturation for that "anime" pop
+        hsv = cv2.cvtColor(cartoon, cv2.COLOR_BGR2HSV)
+        h, s, v = cv2.split(hsv)
+        s = cv2.multiply(s, 1.2)  # Boost saturation
+        s = np.clip(s, 0, 255).astype(np.uint8)
+        hsv = cv2.merge([h, s, v])
+        cartoon = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+        return cartoon
+
+
+
     def render_clones(self, frame, mask):
         """
         Render all shadow clones behind the real user.
@@ -321,6 +358,9 @@ class ShadowCloneAR:
         small_frame = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_AREA)
         small_mask = cv2.resize(mask, (small_w, small_h), interpolation=cv2.INTER_NEAREST)
         small_user = cv2.bitwise_and(small_frame, small_frame, mask=small_mask)
+
+        # Apply Anime Style to the SCALED DOWN clone source
+        small_user = self.apply_anime_style(small_user)
 
         # Center offset: place the scaled clone so its center aligns with offset
         cx_shift = (w - small_w) // 2
@@ -642,6 +682,8 @@ class ShadowCloneAR:
             if self.clone_mode:
                 mask = self.segment_user(frame)
                 display = self.render_clones(frame, mask)
+
+
 
             # ── Poof Effect ────────────────────────────────────
             if self.poof_active:
