@@ -305,63 +305,71 @@ class ShadowCloneAR:
 
         Process:
           1. Start with the original frame (background)
-          2. For each clone offset, shift the masked user pixels
-          3. Blend each clone onto the composite
+          2. Scale down the user silhouette to clone_scale (60%)
+          3. For each clone offset, place the scaled clone
           4. Paint the real user on top at full opacity
         """
         h, w = frame.shape[:2]
         composite = frame.copy()
 
-        # Pre-compute the user pixels (masked)
-        user_only = cv2.bitwise_and(frame, frame, mask=mask)
+        # ── Pre-compute scaled-down clone image & mask ─────────
+        clone_scale = 0.60  # Clones are 60% the size of real user
+        small_w = int(w * clone_scale)
+        small_h = int(h * clone_scale)
 
-        # Sort clones by Y offset (back-to-front: lower y_offset = further back)
+        # Scale down the user pixels and mask
+        small_frame = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_AREA)
+        small_mask = cv2.resize(mask, (small_w, small_h), interpolation=cv2.INTER_NEAREST)
+        small_user = cv2.bitwise_and(small_frame, small_frame, mask=small_mask)
+
+        # Center offset: place the scaled clone so its center aligns with offset
+        cx_shift = (w - small_w) // 2
+        cy_shift = (h - small_h) // 2
+
+        # Sort clones by Y offset (back-to-front)
         sorted_offsets = sorted(self.clone_offsets, key=lambda o: o[1])
 
         for x_off, y_off in sorted_offsets:
-            # Calculate valid source → destination regions
-            src_x1 = max(0, -x_off)
-            src_x2 = min(w, w - x_off)
-            src_y1 = max(0, -y_off)
-            src_y2 = min(h, h - y_off)
+            # Destination position for the scaled clone
+            dst_x = cx_shift + x_off
+            dst_y = cy_shift + y_off
 
-            dst_x1 = max(0, x_off)
-            dst_x2 = min(w, w + x_off)
-            dst_y1 = max(0, y_off)
-            dst_y2 = min(h, h + y_off)
+            # Clip to frame boundaries
+            # Source region (from small clone)
+            sx1 = max(0, -dst_x)
+            sy1 = max(0, -dst_y)
+            sx2 = min(small_w, w - dst_x)
+            sy2 = min(small_h, h - dst_y)
 
-            # Ensure matching dimensions
-            copy_w = min(src_x2 - src_x1, dst_x2 - dst_x1)
-            copy_h = min(src_y2 - src_y1, dst_y2 - dst_y1)
+            # Destination region (on composite)
+            dx1 = max(0, dst_x)
+            dy1 = max(0, dst_y)
+            dx2 = dx1 + (sx2 - sx1)
+            dy2 = dy1 + (sy2 - sy1)
 
-            if copy_w <= 0 or copy_h <= 0:
+            region_w = sx2 - sx1
+            region_h = sy2 - sy1
+
+            if region_w <= 0 or region_h <= 0:
                 continue
 
-            # Extract the shifted mask region
-            shifted_mask_region = mask[src_y1:src_y1 + copy_h,
-                                       src_x1:src_x1 + copy_w]
+            # Extract regions
+            clone_region = small_user[sy1:sy1 + region_h, sx1:sx1 + region_w]
+            mask_region = small_mask[sy1:sy1 + region_h, sx1:sx1 + region_w]
+            dst_region = composite[dy1:dy1 + region_h, dx1:dx1 + region_w]
 
-            # Extract the shifted user pixels
-            shifted_user_region = user_only[src_y1:src_y1 + copy_h,
-                                             src_x1:src_x1 + copy_w]
-
-            # Get the current composite region where the clone will be drawn
-            dst_region = composite[dst_y1:dst_y1 + copy_h,
-                                    dst_x1:dst_x1 + copy_w]
-
-            # Blend: clone at 85% opacity where mask is active
+            # Blend clone at 85% opacity
             clone_alpha = 0.85
-            clone_mask_3ch = np.stack([shifted_mask_region] * 3, axis=-1).astype(np.float32)
+            mask_3ch = np.stack([mask_region] * 3, axis=-1).astype(np.float32)
 
             blended = (
-                dst_region.astype(np.float32) * (1 - clone_alpha * clone_mask_3ch) +
-                shifted_user_region.astype(np.float32) * (clone_alpha * clone_mask_3ch)
+                dst_region.astype(np.float32) * (1 - clone_alpha * mask_3ch) +
+                clone_region.astype(np.float32) * (clone_alpha * mask_3ch)
             ).astype(np.uint8)
 
-            composite[dst_y1:dst_y1 + copy_h,
-                       dst_x1:dst_x1 + copy_w] = blended
+            composite[dy1:dy1 + region_h, dx1:dx1 + region_w] = blended
 
-        # Paint the REAL user on top at 100% opacity
+        # Paint the REAL user on top at 100% opacity (full size)
         user_area = mask > 0
         composite[user_area] = frame[user_area]
 
